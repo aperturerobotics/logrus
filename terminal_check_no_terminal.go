@@ -1,3 +1,4 @@
+//go:build js || nacl || plan9 || gopherjs
 // +build js nacl plan9 gopherjs
 
 package logrus

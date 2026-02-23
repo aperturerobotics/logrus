@@ -14,13 +14,6 @@ import (
 	"unicode/utf8"
 )
 
-const (
-	red    = 31
-	yellow = 33
-	blue   = 36
-	gray   = 37
-)
-
 var baseTimestamp = time.Now()
 
 // TextFormatter formats logs into text
@@ -96,9 +89,26 @@ type TextFormatter struct {
 
 	// The max length of the level text, generated dynamically on init
 	levelTextMaxLength int
+
+	Red    int
+	Yellow int
+	Blue   int
+	Gray   int
 }
 
 func (f *TextFormatter) init(entry *Entry) {
+	if f.Red == 0 {
+		f.Red = 31
+	}
+	if f.Yellow == 0 {
+		f.Yellow = 33
+	}
+	if f.Blue == 0 {
+		f.Blue = 36
+	}
+	if f.Gray == 0 {
+		f.Gray = 37
+	}
 	if entry.Logger != nil {
 		f.isTerminal = checkIfTerminal(entry.Logger.Out)
 	}
@@ -228,15 +238,13 @@ func (f *TextFormatter) printColored(b *bytes.Buffer, entry *Entry, keys []strin
 	var levelColor int
 	switch entry.Level {
 	case DebugLevel, TraceLevel:
-		levelColor = gray
+		levelColor = f.Gray
 	case WarnLevel:
-		levelColor = yellow
+		levelColor = f.Yellow
 	case ErrorLevel, FatalLevel, PanicLevel:
-		levelColor = red
+		levelColor = f.Red
 	case InfoLevel:
-		levelColor = blue
-	default:
-		levelColor = blue
+		levelColor = f.Blue
 	}
 
 	levelText := strings.ToUpper(entry.Level.String())

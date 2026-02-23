@@ -140,9 +140,9 @@ type StdLogger interface {
 // FieldLogger extends the [StdLogger] interface, generalizing
 // the [Entry] and [Logger] types.
 type FieldLogger interface {
-	WithField(key string, value any) *Entry
-	WithFields(fields Fields) *Entry
-	WithError(err error) *Entry
+	WithField(key string, value any) FieldLogger
+	WithFields(fields Fields) FieldLogger
+	WithError(err error) FieldLogger
 
 	Debugf(format string, args ...any)
 	Infof(format string, args ...any)

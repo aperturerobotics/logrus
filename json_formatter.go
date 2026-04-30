@@ -2,10 +2,11 @@ package logrus
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"runtime"
+	"sort"
 	"strconv"
+	"strings"
 )
 
 type fieldKey string
@@ -118,14 +119,112 @@ func (f *JSONFormatter) Format(entry *Entry) ([]byte, error) {
 		b = new(bytes.Buffer)
 	}
 
-	encoder := json.NewEncoder(b)
-	encoder.SetEscapeHTML(!f.DisableHTMLEscape)
-	if f.PrettyPrint {
-		encoder.SetIndent("", "  ")
-	}
-	if err := encoder.Encode(data); err != nil {
+	if err := f.appendJSONFields(b, data, ""); err != nil {
 		return nil, fmt.Errorf("failed to marshal fields to JSON, %w", err)
 	}
+	b.WriteByte('\n')
 
 	return b.Bytes(), nil
+}
+
+type jsonMarshaler interface {
+	MarshalJSON() ([]byte, error)
+}
+
+func (f *JSONFormatter) appendJSONFields(b *bytes.Buffer, data Fields, prefix string) error {
+	b.WriteByte('{')
+	keys := make([]string, 0, len(data))
+	for k, v := range data {
+		keys = append(keys, k)
+		_ = v
+	}
+	sort.Strings(keys)
+	for i, k := range keys {
+		v := data[k]
+		if i != 0 {
+			b.WriteByte(',')
+		}
+		if f.PrettyPrint {
+			b.WriteByte('\n')
+			b.WriteString(prefix)
+			b.WriteString("  ")
+		}
+		f.appendJSONString(b, k)
+		b.WriteByte(':')
+		if f.PrettyPrint {
+			b.WriteByte(' ')
+		}
+		if err := f.appendJSONValue(b, v, prefix+"  "); err != nil {
+			return err
+		}
+	}
+	if f.PrettyPrint && len(keys) != 0 {
+		b.WriteByte('\n')
+		b.WriteString(prefix)
+	}
+	b.WriteByte('}')
+	return nil
+}
+
+func (f *JSONFormatter) appendJSONValue(b *bytes.Buffer, value any, prefix string) error {
+	switch v := value.(type) {
+	case nil:
+		b.WriteString("null")
+	case string:
+		f.appendJSONString(b, v)
+	case []byte:
+		f.appendJSONString(b, string(v))
+	case error:
+		f.appendJSONString(b, v.Error())
+	case jsonMarshaler:
+		out, err := v.MarshalJSON()
+		if err != nil {
+			return err
+		}
+		b.Write(out)
+	case bool:
+		b.WriteString(strconv.FormatBool(v))
+	case int:
+		b.WriteString(strconv.FormatInt(int64(v), 10))
+	case int8:
+		b.WriteString(strconv.FormatInt(int64(v), 10))
+	case int16:
+		b.WriteString(strconv.FormatInt(int64(v), 10))
+	case int32:
+		b.WriteString(strconv.FormatInt(int64(v), 10))
+	case int64:
+		b.WriteString(strconv.FormatInt(v, 10))
+	case uint:
+		b.WriteString(strconv.FormatUint(uint64(v), 10))
+	case uint8:
+		b.WriteString(strconv.FormatUint(uint64(v), 10))
+	case uint16:
+		b.WriteString(strconv.FormatUint(uint64(v), 10))
+	case uint32:
+		b.WriteString(strconv.FormatUint(uint64(v), 10))
+	case uint64:
+		b.WriteString(strconv.FormatUint(v, 10))
+	case uintptr:
+		b.WriteString(strconv.FormatUint(uint64(v), 10))
+	case float32:
+		b.WriteString(strconv.FormatFloat(float64(v), 'g', -1, 32))
+	case float64:
+		b.WriteString(strconv.FormatFloat(v, 'g', -1, 64))
+	case Fields:
+		return f.appendJSONFields(b, v, prefix)
+	default:
+		f.appendJSONString(b, fmt.Sprint(v))
+	}
+	return nil
+}
+
+func (f *JSONFormatter) appendJSONString(b *bytes.Buffer, s string) {
+	var tmp [128]byte
+	out := string(strconv.AppendQuote(tmp[:0], s))
+	if !f.DisableHTMLEscape {
+		out = strings.ReplaceAll(out, "&", `\u0026`)
+		out = strings.ReplaceAll(out, "<", `\u003c`)
+		out = strings.ReplaceAll(out, ">", `\u003e`)
+	}
+	b.WriteString(out)
 }

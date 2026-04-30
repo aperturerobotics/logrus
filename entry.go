@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -182,21 +181,15 @@ func (entry *Entry) WithFields(fields Fields) *Entry {
 	maps.Copy(data, entry.Data)
 	fieldErr := entry.err
 	for k, v := range fields {
-		isErrField := false
-		if t := reflect.TypeOf(v); t != nil {
-			switch {
-			case t.Kind() == reflect.Func, t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Func:
-				isErrField = true
-			}
-		}
-		if isErrField {
+		switch v.(type) {
+		case func(), *func():
 			tmp := fmt.Sprintf("can not add field %q", k)
 			if fieldErr != "" {
 				fieldErr += ", " + tmp
 			} else {
 				fieldErr = tmp
 			}
-		} else {
+		default:
 			data[k] = v
 		}
 	}

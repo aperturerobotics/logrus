@@ -8,7 +8,6 @@ name: CI
 # see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,13 +25,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: stable
       - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
 
   cross:
     name: Cross
@@ -40,9 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: stable
       - name: Build
@@ -65,9 +64,9 @@ jobs:
         shell: bash
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: ${{ matrix.go-version }}
       - name: Test
@@ -76,45 +75,34 @@ jobs:
   tinygo:
     name: TinyGo
     timeout-minutes: 10
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # TinyGo may not have support for all latest language features,
+        # so we're pinning to a fixed version for now.
+        # https://tinygo.org/docs/reference/go-compat-matrix/
+        go-version: [1.26.x]
+        platform: [ubuntu-latest]
+    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: stable
+          go-version: ${{ matrix.go-version }}
       - name: Install TinyGo
         run: |
-          wget https://github.com/tinygo-org/tinygo/releases/download/v0.41.1/tinygo_0.41.1_amd64.deb
-          sudo dpkg -i tinygo_0.41.1_amd64.deb
-      - name: Test TinyGo support
-        run: |
-          dir=$(mktemp -d)
-          cd "$dir"
-          go mod init logrus-tinygo-smoke
-          go mod edit -replace github.com/sirupsen/logrus="$GITHUB_WORKSPACE"
-          go get github.com/sirupsen/logrus
-          cat > logrus_tinygo_test.go <<'EOF'
-          package logrus_tinygo_smoke
-
-          import (
-          	"bytes"
-          	"testing"
-
-          	"github.com/sirupsen/logrus"
-          )
-
-          func TestTinyGoLogging(t *testing.T) {
-          	var out bytes.Buffer
-          	logger := logrus.New()
-          	logger.SetOutput(&out)
-          	logger.SetFormatter(&logrus.TextFormatter{DisableTimestamp: true})
-          	logger.WithField("target", "tinygo").Info("hello")
-
-          	if out.Len() == 0 {
-          		t.Fatal("expected log output")
-          	}
-          }
-          EOF
-          tinygo test .
+          tinygo_deb="tinygo_${TINYGO_VERSION}_amd64.deb"
+          wget --progress=dot:giga "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/${tinygo_deb}"
+          echo "${TINYGO_CHECKSUM#sha256:} *${tinygo_deb}" | sha256sum -c -
+          sudo dpkg -i "${tinygo_deb}"
+          tinygo version
+        env:
+          TINYGO_VERSION: 0.41.1
+          TINYGO_CHECKSUM: "sha256:901fbccffc61adb111656d1f907dfc21b6c499ca841b115866a0d6de2d835fbe"
+      - name: Test
+        # Run with "safe" tag to avoid "panic: reflect.Value has no flag field"
+        # coming from go-spew (or the next testify version);
+        # https://github.com/davecgh/go-spew/blob/v1.1.1/spew/bypass.go#L105-L109
+        # https://github.com/stretchr/testify/blob/001eb7946baf451879253643e4ce4b38eaa0d4a7/internal/spew/bypass.go#L106-L110
+        run: tinygo test -tags safe -v ./...

@@ -1,3 +1,6 @@
+// TinyGo doesn't implement b.SetParallelism.
+//go:build !tinygo
+
 package logrus_test
 
 import (
@@ -53,6 +56,35 @@ func doLoggerBenchmarkNoLock(b *testing.B, out *os.File, formatter logrus.Format
 		entry := logger.WithFields(fields) // new entry per goroutine
 		for pb.Next() {
 			entry.Info("aaa")
+		}
+	})
+}
+
+func BenchmarkLoggerLog(b *testing.B) {
+	logger := logrus.New()
+	logger.SetFormatter(nopFormatter{})
+	logger.SetLevel(logrus.InfoLevel)
+	logger.SetOutput(io.Discard)
+
+	b.Run("disabled_level", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			logger.Log(logrus.DebugLevel, "test")
+		}
+	})
+	b.Run("enabled_log", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			logger.Log(logrus.WarnLevel, "test")
+		}
+	})
+	b.Run("enabled_logln", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			logger.Logln(logrus.WarnLevel, "test")
 		}
 	})
 }

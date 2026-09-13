@@ -17,30 +17,48 @@ import (
 )
 
 func TestFormatting(t *testing.T) {
-	tf := &TextFormatter{DisableColors: true}
+	var buf bytes.Buffer
 
-	testCases := []struct {
+	tf := &TextFormatter{
+		DisableColors:    true,
+		DisableTimestamp: true,
+	}
+
+	logger := New()
+	logger.SetOutput(&buf)
+	logger.SetFormatter(tf)
+
+	tests := []struct {
 		value    string
 		expected string
 	}{
-		{`foo`, "time=\"0001-01-01T00:00:00Z\" level=panic test=foo\n"},
+		{`foo`, "level=info test=foo\n"},
 	}
 
-	for _, tc := range testCases {
-		b, _ := tf.Format(WithField("test", tc.value))
+	for _, tc := range tests {
+		buf.Reset()
+		logger.WithField("test", tc.value).Info("")
 
-		if string(b) != tc.expected {
-			t.Errorf("formatting expected for %q (result was %q instead of %q)", tc.value, string(b), tc.expected)
+		if buf.String() != tc.expected {
+			t.Errorf("formatting expected for %q (result was %q instead of %q)", tc.value, buf.String(), tc.expected)
 		}
 	}
 }
 
 func TestQuoting(t *testing.T) {
+	var buf bytes.Buffer
+
 	tf := &TextFormatter{DisableColors: true}
 
+	logger := New()
+	logger.SetOutput(&buf)
+	logger.SetFormatter(tf)
+
 	checkQuoting := func(q bool, value any) {
-		b, _ := tf.Format(WithField("test", value))
-		_, after, _ := bytes.Cut(b, ([]byte)("test="))
+		buf.Reset()
+		logger.WithField("test", value).Info("")
+
+		_, after, _ := bytes.Cut(buf.Bytes(), []byte("test="))
 		cont := bytes.Contains(after, []byte("\""))
 		if cont != q {
 			if q {
@@ -130,41 +148,32 @@ func TestQuoting(t *testing.T) {
 }
 
 func TestEscaping(t *testing.T) {
+	var buf bytes.Buffer
+
 	tf := &TextFormatter{DisableColors: true}
 
-	testCases := []struct {
-		value    string
+	logger := New()
+	logger.SetOutput(&buf)
+	logger.SetFormatter(tf)
+
+	ts := time.Now()
+
+	tests := []struct {
+		value    any
 		expected string
 	}{
 		{`ba"r`, `ba\"r`},
 		{`ba'r`, `ba'r`},
-	}
-
-	for _, tc := range testCases {
-		b, _ := tf.Format(WithField("test", tc.value))
-		if !bytes.Contains(b, []byte(tc.expected)) {
-			t.Errorf("escaping expected for %q (result was %q instead of %q)", tc.value, string(b), tc.expected)
-		}
-	}
-}
-
-func TestEscaping_Interface(t *testing.T) {
-	tf := &TextFormatter{DisableColors: true}
-
-	ts := time.Now()
-
-	testCases := []struct {
-		value    any
-		expected string
-	}{
 		{ts, fmt.Sprintf("\"%s\"", ts.String())},
 		{errors.New("error: something went wrong"), "\"error: something went wrong\""},
 	}
 
-	for _, tc := range testCases {
-		b, _ := tf.Format(WithField("test", tc.value))
-		if !bytes.Contains(b, []byte(tc.expected)) {
-			t.Errorf("escaping expected for %q (result was %q instead of %q)", tc.value, string(b), tc.expected)
+	for _, tc := range tests {
+		buf.Reset()
+		logger.WithField("test", tc.value).Info("")
+
+		if !bytes.Contains(buf.Bytes(), []byte(tc.expected)) {
+			t.Errorf("escaping expected for %q (result was %q instead of %q)", tc.value, buf.String(), tc.expected)
 		}
 	}
 }
@@ -503,16 +512,10 @@ func TestTextFormatterIsColored(t *testing.T) {
 				EnvironmentOverrideColors: len(tc.envVars) > 0,
 			}
 
-			expected := tc.expected
-			if runtime.GOOS == "windows" && !tc.forceColors && os.Getenv("CLICOLOR_FORCE") == "" {
-				// On Windows, without ForceColors or CLICOLOR_FORCE, colors are disabled.
-				expected = false
-			}
-
 			// TODO(thaJeztah): need a way to mock "isTerminal" and check "isColored" for testing
 			//  without depending on non-exported methods and fields.
 			res := tf.isColored(tc.isTerminal) // tc.isTerminal avoids depending on a real TTY
-			assert.Equal(t, expected, res)
+			assert.Equal(t, tc.expected, res)
 		})
 	}
 }
@@ -573,10 +576,12 @@ func TestCustomSorting(t *testing.T) {
 //
 // regression test for https://github.com/sirupsen/logrus/issues/1298
 func TestCustomSorting_FirstFormat(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("colored output not supported on Windows")
-	}
 	if !checkIfTerminal(os.Stderr) {
+		if runtime.Compiler == "tinygo" {
+			// TinyGo currently (v0.41.1) doesn't support t.Skip (SkipNow is incomplete, requires runtime.Goexit())
+			t.Log("SKIP: test requires a TTY")
+			return
+		}
 		t.Skip("test requires a TTY")
 	}
 
@@ -661,7 +666,6 @@ func TestTextEntryFieldValueError(t *testing.T) {
 		if field := `ok=ok`; !strings.Contains(out, field) {
 			t.Errorf(`Expected log entry to contain "ok=ok": %v`, out)
 		}
-
 	})
 
 	// This is testing the current behavior; error is preserved, even if an
@@ -686,4 +690,104 @@ func TestTextEntryFieldValueError(t *testing.T) {
 			t.Errorf(`Expected log entry to contain "ok=ok": %v`, out)
 		}
 	})
+}
+
+type panicError string
+
+func (e panicError) Error() string { panic(string(e)) }
+
+type panicStringer string
+
+func (s panicStringer) String() string { panic(string(s)) }
+
+type nilError struct{}
+
+func (*nilError) Error() string { panic("boom") }
+
+type nilValueError struct{}
+
+func (nilValueError) Error() string { return "" }
+
+type nilStringer struct{}
+
+func (*nilStringer) String() string { panic("boom") }
+
+type nilValueStringer struct{}
+
+func (nilValueStringer) String() string { return "" }
+
+// TestTextFormatterPanickingValue verifies panicking Error and Stringer
+// methods are recovered.
+//
+// regression test for https://github.com/sirupsen/logrus/issues/1580
+func TestTextFormatterPanickingValue(t *testing.T) {
+	var (
+		nilErr         *nilError
+		nilValueErr    *nilValueError
+		nilString      *nilStringer
+		nilValueString *nilValueStringer
+	)
+
+	tests := []struct {
+		doc   string
+		value any
+		want  string
+
+		skipTiny bool
+	}{
+		{
+			doc:   "error",
+			value: panicError("boom"),
+			want:  `level=info test="%!v(PANIC=Error method: boom)"` + "\n",
+		},
+		{
+			doc:   "stringer",
+			value: panicStringer("boom"),
+			want:  `level=info test="%!v(PANIC=String method: boom)"` + "\n",
+		},
+		{
+			doc:   "nil pointer-receiver error",
+			value: nilErr,
+			want:  `level=info test="<nil>"` + "\n",
+		},
+		{
+			doc:      "nil value-receiver error",
+			value:    nilValueErr,
+			want:     `level=info test="<nil>"` + "\n",
+			skipTiny: true,
+		},
+		{
+			doc:   "nil pointer-receiver stringer",
+			value: nilString,
+			want:  `level=info test="<nil>"` + "\n",
+		},
+		{
+			doc:      "nil value-receiver stringer",
+			value:    nilValueString,
+			want:     `level=info test="<nil>"` + "\n",
+			skipTiny: true,
+		},
+	}
+
+	formatter := &TextFormatter{
+		DisableColors:    true,
+		DisableTimestamp: true,
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.doc, func(t *testing.T) {
+			if tc.skipTiny && runtime.Compiler == "tinygo" {
+				// tinygo doesn't support t.Skip
+				msg := "TinyGo does not panic when invoking a value-receiver method through a nil pointer"
+				t.Log(msg+"\n\r--- SKIP:", t.Name(), "(0.00s)")
+				return
+			}
+			got, err := formatter.Format(&Entry{
+				Level: InfoLevel,
+				Data:  Fields{"test": tc.value},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, string(got))
+		})
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -65,8 +66,13 @@ type Entry struct {
 	// is fired and reflects the level used for that log call.
 	Level Level
 
-	// Caller contains the calling method information when caller
-	// reporting is enabled.
+	// Caller contains the calling method information.
+	//
+	// When [Logger.ReportCaller] is enabled, Caller is populated automatically at
+	// log time if it is nil. Hooks and formatters may inspect Caller.
+	//
+	// Applications generally should not modify Caller unless they intentionally
+	// want to provide custom caller information.
 	Caller *runtime.Frame
 
 	// Message is the log message supplied to one of the logging methods
@@ -103,10 +109,18 @@ func NewEntry(logger *Logger) *Entry {
 // Data is cloned to avoid mutating the original entry. Other fields
 // (Logger, Time, Context, etc.) are copied by value.
 func (entry *Entry) Dup() *Entry {
+	dup := entry.dup()
+	dup.Data = maps.Clone(entry.Data)
+	return dup
+}
+
+// dup copies the entry fields shared by derived entries except Data, which
+// callers must copy or initialize as appropriate for their use.
+func (entry *Entry) dup() *Entry {
 	return &Entry{
 		Logger:  entry.Logger,
-		Data:    maps.Clone(entry.Data),
 		Time:    entry.Time,
+		Caller:  entry.Caller,
 		Context: entry.Context,
 		err:     entry.err,
 	}
@@ -144,67 +158,62 @@ func (entry *Entry) String() (string, error) {
 // WithError adds an error as single field (using the key defined in [ErrorKey])
 // to the Entry.
 func (entry *Entry) WithError(err error) *Entry {
-	// Avoid reflection work in WithFields; we know the type is an error;
-	// copy the entry data and set the ErrorKey directly.
-	data := make(Fields, len(entry.Data)+1)
-	maps.Copy(data, entry.Data)
-	data[ErrorKey] = err
-
-	return &Entry{
-		Logger:  entry.Logger,
-		Data:    data,
-		Time:    entry.Time,
-		Context: entry.Context,
-		err:     entry.err,
-	}
+	return entry.WithField(ErrorKey, err)
 }
 
 // WithContext adds a context to the Entry.
 func (entry *Entry) WithContext(ctx context.Context) *Entry {
-	return &Entry{
-		Logger:  entry.Logger,
-		Data:    maps.Clone(entry.Data),
-		Time:    entry.Time,
-		Context: ctx,
-		err:     entry.err,
-	}
+	dup := entry.dup()
+	dup.Data = maps.Clone(entry.Data)
+	dup.Context = ctx
+	return dup
 }
 
 // WithField adds a single field to the Entry.
 func (entry *Entry) WithField(key string, value any) *Entry {
-	return entry.WithFields(Fields{key: value})
+	dup := entry.dup()
+	dup.Data = maps.Clone(entry.Data)
+	dup.addField(key, value)
+	return dup
 }
 
 // WithFields adds a map of fields to the Entry.
 func (entry *Entry) WithFields(fields Fields) *Entry {
-	data := make(Fields, len(entry.Data)+len(fields))
-	maps.Copy(data, entry.Data)
-	fieldErr := entry.err
-	for k, v := range fields {
-		switch v.(type) {
-		case func(), *func():
-			tmp := fmt.Sprintf("can not add field %q", k)
-			if fieldErr != "" {
-				fieldErr += ", " + tmp
-			} else {
-				fieldErr = tmp
-			}
-		default:
-			data[k] = v
-		}
+	dup := entry.dup()
+	dup.Data = make(Fields, len(entry.Data)+len(fields))
+	maps.Copy(dup.Data, entry.Data)
+
+	for key, value := range fields {
+		dup.addField(key, value)
 	}
-	return &Entry{Logger: entry.Logger, Data: data, Time: entry.Time, err: fieldErr, Context: entry.Context}
+	return dup
 }
 
 // WithTime overrides the time of the Entry.
 func (entry *Entry) WithTime(t time.Time) *Entry {
-	return &Entry{
-		Logger:  entry.Logger,
-		Data:    maps.Clone(entry.Data),
-		Time:    t,
-		Context: entry.Context,
-		err:     entry.err,
+	dup := entry.dup()
+	dup.Data = maps.Clone(entry.Data)
+	dup.Time = t
+	return dup
+}
+
+func (entry *Entry) addField(key string, value any) {
+	if _, ok := value.(error); !ok {
+		switch value.(type) {
+		case func(), *func():
+			if entry.err != "" {
+				entry.err += ", skipping unsupported field " + strconv.Quote(key)
+			} else {
+				entry.err = "skipping unsupported field " + strconv.Quote(key)
+			}
+			return
+		}
 	}
+
+	if entry.Data == nil {
+		entry.Data = make(Fields, 1)
+	}
+	entry.Data[key] = value
 }
 
 // getPackageName reduces a fully qualified function name to the package name
@@ -262,16 +271,45 @@ func getCaller() *runtime.Frame {
 
 // HasCaller reports whether this Entry contains caller information.
 //
-// Caller is attached at log time if [Logger.ReportCaller] was enabled.
-// In most cases, it is preferable to check whether [Entry.Caller] is nil
-// directly.
+// Caller may be set explicitly, or populated at log time when
+// [Logger.ReportCaller] is enabled.
+//
+// Deprecated: use [Entry.Caller] != nil instead.
+//
+//go:fix inline
 func (entry Entry) HasCaller() bool {
 	return entry.Caller != nil
 }
 
-func (entry *Entry) log(level Level, msg string) {
-	newEntry := entry.Dup()
-	logger := newEntry.Logger
+func (entry *Entry) logArgs(level Level, panicAfter bool, args ...any) {
+	entry.log(level, panicAfter, sprint(args...))
+}
+
+func (entry *Entry) logf(level Level, panicAfter bool, format string, args ...any) {
+	entry.log(level, panicAfter, fmt.Sprintf(format, args...))
+}
+
+// logln uses Sprintln for multiple arguments to preserve Println-style
+// spacing between args, then trims the trailing newline.
+func (entry *Entry) logln(level Level, panicAfter bool, args ...any) {
+	if len(args) <= 1 {
+		entry.log(level, panicAfter, sprint(args...))
+		return
+	}
+	msg := fmt.Sprintln(args...)
+	msg = msg[:len(msg)-1] // Trim the newline added by Sprintln; logging adds its own.
+	entry.log(level, panicAfter, msg)
+}
+
+// log writes msg at level. If panicAfter is true, it panics with the fully
+// populated entry after hooks and output have completed.
+//
+// The explicit flag keeps panic behavior limited to Panic, Panicf, and
+// Panicln while avoiding a return value used only as the panic value.
+// See #1283 and commits f96066e and 5f8c666.
+func (entry *Entry) log(level Level, panicAfter bool, msg string) {
+	newEntry := entry.dup()
+	newEntry.Data = maps.Clone(entry.Data)
 
 	if newEntry.Time.IsZero() {
 		newEntry.Time = time.Now()
@@ -280,12 +318,14 @@ func (entry *Entry) log(level Level, msg string) {
 	newEntry.Level = level
 	newEntry.Message = msg
 
+	logger := newEntry.Logger
 	logger.mu.Lock()
 	reportCaller := logger.ReportCaller
 	bufPool := newEntry.getBufferPool()
 	logger.mu.Unlock()
 
-	if reportCaller {
+	// Preserve explicitly set caller information.
+	if reportCaller && newEntry.Caller == nil {
 		newEntry.Caller = getCaller()
 	}
 
@@ -306,10 +346,9 @@ func (entry *Entry) log(level Level, msg string) {
 	newEntry.write()
 	newEntry.Buffer = nil
 
-	// To avoid Entry#log() returning a value that only would make sense for
-	// panic() to use in Entry#Panic(), we avoid the allocation by checking
-	// directly here.
-	if level <= PanicLevel {
+	// Panic here so the panic value contains the fully populated entry without
+	// requiring log to return it to the caller.
+	if panicAfter {
 		panic(newEntry)
 	}
 }
@@ -355,11 +394,13 @@ func (entry *Entry) write() {
 
 // Log logs a message at the specified level.
 //
-// Note: using Log with [PanicLevel] or [FatalLevel] does not trigger a panic
-// or exit. For that behavior, use [Entry.Panic] or [Entry.Fatal].
+// Using Log with [PanicLevel] or [FatalLevel] intentionally does not
+// trigger a panic or exit. Log treats the level as logging severity only;
+// use [Entry.Panic] or [Entry.Fatal] when those side effects are desired.
 func (entry *Entry) Log(level Level, args ...any) {
+	const panicAfter = false
 	if entry.Logger.IsLevelEnabled(level) {
-		entry.log(level, fmt.Sprint(args...))
+		entry.logArgs(level, panicAfter, args...)
 	}
 }
 
@@ -397,14 +438,23 @@ func (entry *Entry) Fatal(args ...any) {
 }
 
 func (entry *Entry) Panic(args ...any) {
-	entry.Log(PanicLevel, args...)
+	const panicAfter = true
+	if entry.Logger.IsLevelEnabled(PanicLevel) {
+		entry.logArgs(PanicLevel, panicAfter, args...)
+	}
 }
 
 // Entry Printf family functions
 
+// Logf logs a formatted message at the specified level.
+//
+// Using Logf with [PanicLevel] or [FatalLevel] intentionally does not
+// trigger a panic or exit. Logf treats the level as logging severity only;
+// use [Entry.Panicf] or [Entry.Fatalf] when those side effects are desired.
 func (entry *Entry) Logf(level Level, format string, args ...any) {
+	const panicAfter = false
 	if entry.Logger.IsLevelEnabled(level) {
-		entry.Log(level, fmt.Sprintf(format, args...))
+		entry.logf(level, panicAfter, format, args...)
 	}
 }
 
@@ -442,14 +492,23 @@ func (entry *Entry) Fatalf(format string, args ...any) {
 }
 
 func (entry *Entry) Panicf(format string, args ...any) {
-	entry.Logf(PanicLevel, format, args...)
+	const panicAfter = true
+	if entry.Logger.IsLevelEnabled(PanicLevel) {
+		entry.logf(PanicLevel, panicAfter, format, args...)
+	}
 }
 
 // Entry Println family functions
 
+// Logln logs a message at the specified level with Println-style spacing.
+//
+// Using Logln with [PanicLevel] or [FatalLevel] intentionally does not
+// trigger a panic or exit. Logln treats the level as logging severity only;
+// use [Entry.Panicln] or [Entry.Fatalln] when those side effects are desired.
 func (entry *Entry) Logln(level Level, args ...any) {
+	const panicAfter = false
 	if entry.Logger.IsLevelEnabled(level) {
-		entry.Log(level, entry.sprintlnn(args...))
+		entry.logln(level, panicAfter, args...)
 	}
 }
 
@@ -487,14 +546,21 @@ func (entry *Entry) Fatalln(args ...any) {
 }
 
 func (entry *Entry) Panicln(args ...any) {
-	entry.Logln(PanicLevel, args...)
+	const panicAfter = true
+	if entry.Logger.IsLevelEnabled(PanicLevel) {
+		entry.logln(PanicLevel, panicAfter, args...)
+	}
 }
 
-// sprintlnn => Sprint no newline. This is to get the behavior of how
-// fmt.Sprintln where spaces are always added between operands, regardless of
-// their type. Instead of vendoring the Sprintln implementation to spare a
-// string allocation, we do the simplest thing.
-func (entry *Entry) sprintlnn(args ...any) string {
-	msg := fmt.Sprintln(args...)
-	return msg[:len(msg)-1]
+// sprint is fmt.Sprint with fast paths for zero or one string argument.
+func sprint(args ...any) string {
+	switch len(args) {
+	case 0:
+		return ""
+	case 1:
+		if msg, ok := args[0].(string); ok {
+			return msg
+		}
+	}
+	return fmt.Sprint(args...)
 }

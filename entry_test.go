@@ -655,3 +655,69 @@ func TestEntryDataIsMutable(t *testing.T) {
 		"three": 3,
 	}, hook.Entries[1].Data)
 }
+
+func TestNilEntryIsNoOp(t *testing.T) {
+	var entry *logrus.Entry
+
+	require.NotPanics(t, func() {
+		entry.Log(logrus.InfoLevel, "log")
+		entry.Trace("trace")
+		entry.Debug("debug")
+		entry.Print("print")
+		entry.Info("info")
+		entry.Warn("warn")
+		entry.Warning("warning")
+		entry.Error("error")
+		entry.Fatal("fatal")
+		entry.Panic("panic")
+
+		entry.Logf(logrus.InfoLevel, "%s", "logf")
+		entry.Tracef("%s", "tracef")
+		entry.Debugf("%s", "debugf")
+		entry.Printf("%s", "printf")
+		entry.Infof("%s", "infof")
+		entry.Warnf("%s", "warnf")
+		entry.Warningf("%s", "warningf")
+		entry.Errorf("%s", "errorf")
+		entry.Fatalf("%s", "fatalf")
+		entry.Panicf("%s", "panicf")
+
+		entry.Logln(logrus.InfoLevel, "logln")
+		entry.Traceln("traceln")
+		entry.Debugln("debugln")
+		entry.Println("println")
+		entry.Infoln("infoln")
+		entry.Warnln("warnln")
+		entry.Warningln("warningln")
+		entry.Errorln("errorln")
+		entry.Fatalln("fatalln")
+		entry.Panicln("panicln")
+	})
+
+	assert.Nil(t, entry.Dup())
+	assert.Nil(t, entry.WithError(errors.New("boom")))
+	assert.Nil(t, entry.WithContext(context.Background()))
+	assert.Nil(t, entry.WithField("k", "v"))
+	assert.Nil(t, entry.WithFields(logrus.Fields{"k": "v"}))
+	assert.Nil(t, entry.WithTime(time.Now()))
+
+	require.NotPanics(t, func() {
+		entry.WithField("k", "v").WithFields(logrus.Fields{"a": 1}).Warn("chained")
+	})
+
+	b, err := entry.Bytes()
+	require.NoError(t, err)
+	assert.Nil(t, b)
+
+	s, err := entry.String()
+	require.NoError(t, err)
+	assert.Empty(t, s)
+
+	require.NotPanics(t, func() {
+		w := entry.Writer()
+		require.NotNil(t, w)
+		_, writeErr := w.Write([]byte("hello\n"))
+		require.NoError(t, writeErr)
+		require.NoError(t, w.Close())
+	})
+}

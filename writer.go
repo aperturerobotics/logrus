@@ -28,6 +28,16 @@ func (entry *Entry) Writer() *io.PipeWriter {
 
 // WriterLevel returns an io.Writer that writes to the logger at the given log level
 func (entry *Entry) WriterLevel(level Level) *io.PipeWriter {
+	if entry == nil {
+		reader, writer := io.Pipe()
+		go func() {
+			_, _ = io.Copy(io.Discard, reader)
+			_ = reader.Close()
+		}()
+		runtime.SetFinalizer(writer, writerFinalizer)
+		return writer
+	}
+
 	reader, writer := io.Pipe()
 
 	printFunc := entry.Print
@@ -62,6 +72,11 @@ func (entry *Entry) WriterLevel(level Level) *io.PipeWriter {
 
 // writerScanner scans the input from the reader and writes it to the logger
 func (entry *Entry) writerScanner(reader *io.PipeReader, printFunc func(args ...any)) {
+	if entry == nil {
+		_, _ = io.Copy(io.Discard, reader)
+		_ = reader.Close()
+		return
+	}
 	scanner := bufio.NewScanner(reader)
 
 	// Set the buffer size to the maximum token size to avoid buffer overflows

@@ -48,6 +48,9 @@ var ErrorKey = "error"
 // to avoid field duplication. Each log operation operates on a copy
 // of the Entry’s data to avoid mutation during formatting.
 //
+// A nil *Entry is safe: pointer-receiver methods are no-ops, and methods
+// that return *Entry return nil so chained calls do not panic.
+//
 //nolint:recvcheck // Entry methods intentionally use both pointer and value receivers.
 type Entry struct {
 	// Logger is the Logger that owns this entry and is responsible for
@@ -109,6 +112,9 @@ func NewEntry(logger *Logger) *Entry {
 // Data is cloned to avoid mutating the original entry. Other fields
 // (Logger, Time, Context, etc.) are copied by value.
 func (entry *Entry) Dup() *Entry {
+	if entry == nil {
+		return nil
+	}
 	dup := entry.dup()
 	dup.Data = maps.Clone(entry.Data)
 	return dup
@@ -117,6 +123,9 @@ func (entry *Entry) Dup() *Entry {
 // dup copies the entry fields shared by derived entries except Data, which
 // callers must copy or initialize as appropriate for their use.
 func (entry *Entry) dup() *Entry {
+	if entry == nil {
+		return nil
+	}
 	return &Entry{
 		Logger:  entry.Logger,
 		Time:    entry.Time,
@@ -128,6 +137,9 @@ func (entry *Entry) dup() *Entry {
 
 // Bytes returns the bytes representation of this entry from the formatter.
 func (entry *Entry) Bytes() ([]byte, error) {
+	if entry == nil {
+		return nil, nil
+	}
 	// Snapshot the formatter under the lock to protect against concurrent
 	// SetFormatter calls, then release the lock before formatting.
 	// This avoids a data race and prevents a deadlock if Format() triggers
@@ -163,6 +175,9 @@ func (entry *Entry) WithError(err error) *Entry {
 
 // WithContext adds a context to the Entry.
 func (entry *Entry) WithContext(ctx context.Context) *Entry {
+	if entry == nil {
+		return nil
+	}
 	dup := entry.dup()
 	dup.Data = maps.Clone(entry.Data)
 	dup.Context = ctx
@@ -171,6 +186,9 @@ func (entry *Entry) WithContext(ctx context.Context) *Entry {
 
 // WithField adds a single field to the Entry.
 func (entry *Entry) WithField(key string, value any) *Entry {
+	if entry == nil {
+		return nil
+	}
 	dup := entry.dup()
 	dup.Data = maps.Clone(entry.Data)
 	dup.addField(key, value)
@@ -179,6 +197,9 @@ func (entry *Entry) WithField(key string, value any) *Entry {
 
 // WithFields adds a map of fields to the Entry.
 func (entry *Entry) WithFields(fields Fields) *Entry {
+	if entry == nil {
+		return nil
+	}
 	dup := entry.dup()
 	dup.Data = make(Fields, len(entry.Data)+len(fields))
 	maps.Copy(dup.Data, entry.Data)
@@ -191,6 +212,9 @@ func (entry *Entry) WithFields(fields Fields) *Entry {
 
 // WithTime overrides the time of the Entry.
 func (entry *Entry) WithTime(t time.Time) *Entry {
+	if entry == nil {
+		return nil
+	}
 	dup := entry.dup()
 	dup.Data = maps.Clone(entry.Data)
 	dup.Time = t
@@ -198,6 +222,9 @@ func (entry *Entry) WithTime(t time.Time) *Entry {
 }
 
 func (entry *Entry) addField(key string, value any) {
+	if entry == nil {
+		return
+	}
 	if _, ok := value.(error); !ok {
 		switch value.(type) {
 		case func(), *func():
@@ -308,6 +335,9 @@ func (entry *Entry) logln(level Level, panicAfter bool, args ...any) {
 // Panicln while avoiding a return value used only as the panic value.
 // See #1283 and commits f96066e and 5f8c666.
 func (entry *Entry) log(level Level, panicAfter bool, msg string) {
+	if entry == nil {
+		return
+	}
 	newEntry := entry.dup()
 	newEntry.Data = maps.Clone(entry.Data)
 
@@ -398,6 +428,9 @@ func (entry *Entry) write() {
 // trigger a panic or exit. Log treats the level as logging severity only;
 // use [Entry.Panic] or [Entry.Fatal] when those side effects are desired.
 func (entry *Entry) Log(level Level, args ...any) {
+	if entry == nil {
+		return
+	}
 	const panicAfter = false
 	if entry.Logger.IsLevelEnabled(level) {
 		entry.logArgs(level, panicAfter, args...)
@@ -433,11 +466,17 @@ func (entry *Entry) Error(args ...any) {
 }
 
 func (entry *Entry) Fatal(args ...any) {
+	if entry == nil {
+		return
+	}
 	entry.Log(FatalLevel, args...)
 	entry.Logger.Exit(1)
 }
 
 func (entry *Entry) Panic(args ...any) {
+	if entry == nil {
+		return
+	}
 	const panicAfter = true
 	if entry.Logger.IsLevelEnabled(PanicLevel) {
 		entry.logArgs(PanicLevel, panicAfter, args...)
@@ -452,6 +491,9 @@ func (entry *Entry) Panic(args ...any) {
 // trigger a panic or exit. Logf treats the level as logging severity only;
 // use [Entry.Panicf] or [Entry.Fatalf] when those side effects are desired.
 func (entry *Entry) Logf(level Level, format string, args ...any) {
+	if entry == nil {
+		return
+	}
 	const panicAfter = false
 	if entry.Logger.IsLevelEnabled(level) {
 		entry.logf(level, panicAfter, format, args...)
@@ -487,11 +529,17 @@ func (entry *Entry) Errorf(format string, args ...any) {
 }
 
 func (entry *Entry) Fatalf(format string, args ...any) {
+	if entry == nil {
+		return
+	}
 	entry.Logf(FatalLevel, format, args...)
 	entry.Logger.Exit(1)
 }
 
 func (entry *Entry) Panicf(format string, args ...any) {
+	if entry == nil {
+		return
+	}
 	const panicAfter = true
 	if entry.Logger.IsLevelEnabled(PanicLevel) {
 		entry.logf(PanicLevel, panicAfter, format, args...)
@@ -506,6 +554,9 @@ func (entry *Entry) Panicf(format string, args ...any) {
 // trigger a panic or exit. Logln treats the level as logging severity only;
 // use [Entry.Panicln] or [Entry.Fatalln] when those side effects are desired.
 func (entry *Entry) Logln(level Level, args ...any) {
+	if entry == nil {
+		return
+	}
 	const panicAfter = false
 	if entry.Logger.IsLevelEnabled(level) {
 		entry.logln(level, panicAfter, args...)
@@ -541,11 +592,17 @@ func (entry *Entry) Errorln(args ...any) {
 }
 
 func (entry *Entry) Fatalln(args ...any) {
+	if entry == nil {
+		return
+	}
 	entry.Logln(FatalLevel, args...)
 	entry.Logger.Exit(1)
 }
 
 func (entry *Entry) Panicln(args ...any) {
+	if entry == nil {
+		return
+	}
 	const panicAfter = true
 	if entry.Logger.IsLevelEnabled(PanicLevel) {
 		entry.logln(PanicLevel, panicAfter, args...)
